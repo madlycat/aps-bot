@@ -1,0 +1,11 @@
+services:
+  aps-bot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - aps-data:/app/data
+
+volumes:
+  aps-data:
+
