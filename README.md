@@ -10,6 +10,7 @@ A standalone Discord replacement for a YAGPDB APS feature. Messages in configure
 - Public and private threads beneath an enabled channel
 - Persistent per-server configuration with `/aps enable`, `/aps disable`, and `/aps status`
 - Safe delivery order: media is downloaded and the webhook post is sent before the source is deleted
+- Per-channel ordering and automatic rollback if part of a multi-message upload fails
 - Docker Compose or direct Python deployment
 
 Mentions are rendered but deliberately do not ping a second time when the webhook copy is created.

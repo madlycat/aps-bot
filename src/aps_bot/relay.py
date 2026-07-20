@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 from dataclasses import dataclass
@@ -49,6 +50,7 @@ class RelayService:
         self.bot = bot
         self.webhook_name = webhook_name
         self._webhooks: dict[int, discord.Webhook] = {}
+        self._channel_locks: dict[int, asyncio.Lock] = {}
 
     async def _buffer_media(self, message: discord.Message) -> list[BufferedUpload]:
         uploads: list[BufferedUpload] = []
@@ -104,6 +106,12 @@ class RelayService:
         return webhook
 
     async def relay(self, message: discord.Message) -> None:
+        """Relay one message while preserving the channel's original message order."""
+        lock = self._channel_locks.setdefault(message.channel.id, asyncio.Lock())
+        async with lock:
+            await self._relay_locked(message)
+
+    async def _relay_locked(self, message: discord.Message) -> None:
         destination: discord.TextChannel
         thread: discord.Thread | None = None
         if isinstance(message.channel, discord.Thread):
@@ -129,22 +137,35 @@ class RelayService:
         username = message.author.display_name[:80]
         avatar_url = message.author.display_avatar.url
 
-        for index in range(send_count):
-            content = chunks[index] if index < len(chunks) else None
-            files = (
-                [upload.to_discord_file() for upload in upload_batches[index]]
-                if index < len(upload_batches)
-                else None
-            )
-            await webhook.send(
-                content=content,
-                username=username,
-                avatar_url=avatar_url,
-                files=files,
-                allowed_mentions=discord.AllowedMentions.none(),
-                suppress_embeds=True,
-                wait=True,
-                thread=thread,
-            )
+        sent_messages: list[discord.WebhookMessage] = []
+        try:
+            for index in range(send_count):
+                content = chunks[index] if index < len(chunks) else None
+                files = (
+                    [upload.to_discord_file() for upload in upload_batches[index]]
+                    if index < len(upload_batches)
+                    else None
+                )
+                sent = await webhook.send(
+                    content=content,
+                    username=username,
+                    avatar_url=avatar_url,
+                    files=files,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                    suppress_embeds=True,
+                    wait=True,
+                    thread=thread,
+                )
+                sent_messages.append(sent)
+        except discord.HTTPException:
+            # A multi-part relay should be all-or-nothing. Keep the user's source
+            # message and remove any webhook chunks that were already accepted.
+            self._webhooks.pop(destination.id, None)
+            for sent in reversed(sent_messages):
+                try:
+                    await sent.delete()
+                except discord.HTTPException:
+                    logger.warning("Could not roll back webhook message %s", sent.id)
+            raise
 
         await message.delete()
